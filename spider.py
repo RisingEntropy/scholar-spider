@@ -5,29 +5,32 @@ import time
 import requests
 import regex as re
 import os
-import io
 import sys
 import matplotlib.pyplot as plt
 import networkx as nx
 import argparse
+from pyvis.network import Network
 
 header = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "}
-coauthor_pattern = """<a tabindex="-1" href="/citations\?user=([A-Z_a-z0-9&;=]*)">([A-Za-z\ ]*)</a>"""
+coauthor_pattern = """<a tabindex="-1" href="/citations\?user=(.*?)">(.*?)</a>"""
 affiliation_pattern = """class="gsc_prf_ila">(.*?)</a>"""
 name_pattern = """<div id="gsc_prf_in">(.*?)</div>"""
 research_interest_pattern = """ class="gsc_prf_inta gs_ibl">(.*?)</a>"""
 no_link_affiliation_pattern = """<div class="gsc_prf_il">(.*?)</div>"""
-h_index_pattern = """<td class="gsc_rsb_std">([0-9]*)</td>"""
+citation_pattern = """<td class="gsc_rsb_std">([0-9]*)</td>"""
 
 coauthor_reg = re.compile(coauthor_pattern)
 affiliation_reg = re.compile(affiliation_pattern)
 name_reg = re.compile(name_pattern)
 research_interest_reg = re.compile(research_interest_pattern)
 no_link_affiliation_reg = re.compile(no_link_affiliation_pattern)
-h_index_reg = re.compile(h_index_pattern)
+citation_reg = re.compile(citation_pattern)
 
 session = None
+MAX_NAME_LENGTH = 35
 
+
+# 设置中文显示字体
 
 def get_random_color():
     hex_digits = '0123456789ABCDEF'
@@ -39,7 +42,7 @@ def get_author_info(url):  # this function claws the coauthor list from google s
     global session
     conn = session.get(url, headers=header)
     while conn.status_code != 200:
-        print("response code:" + str(conn.status_code) + "sleep for 2s", flush=True, file=sys.stderr)
+        print("response code:" + str(conn.status_code) + " sleep for 2s", flush=True, file=sys.stderr)
         time.sleep(2)
         session = requests.Session()
         conn = session.get(url, headers=header)
@@ -49,27 +52,31 @@ def get_author_info(url):  # this function claws the coauthor list from google s
     else:
         res["affiliation"] = affiliation_reg.findall(text)[0]
     coau = coauthor_reg.findall(text)
-    res["coauthor_list"] = []
+    res["coauthors"] = []
     for au in coau:
-        res["coauthor_list"].append({"name": au[1], "id": au[0]})
+        res["coauthors"].append({"name": au[1] if len(au[1]) < 35 else au[1][:MAX_NAME_LENGTH], "id": au[0]})
     res["name"] = name_reg.findall(text)[0]
+    res["name"] = res["name"] if len(res["name"]) < MAX_NAME_LENGTH else res["name"][:MAX_NAME_LENGTH]
     res["research_interest"] = research_interest_reg.findall(text)
-    res["h_index"] = h_index_reg.findall(text)[0]
+    if len(citation_reg.findall(text)) == 0:
+        res["citation"] = 1
+    else:
+        res["citation"] = citation_reg.findall(text)[1]
     return res
 
 
 def claw_data(root_url, max_depth):
     queue = [(0, root_url)]
     author_info = {}
+    tot = 0
     while len(queue) > 0:
         element = queue.pop(0)
         info = get_author_info(element[1])
-        current_author_info = {"name": info["name"], "affiliation": info["affiliation"],
-                               "research_interest": info["research_interest"],
-                               "coauthors": info["coauthor_list"] if element[0] < max_depth else [],
-                               "h_index": info["h_index"]}
-        author_info[current_author_info["name"]] = current_author_info
-        for coauthor in current_author_info["coauthors"]:
+        tot += 1
+        author_info[info["name"]] = info
+        if element[0] >= max_depth:
+            continue
+        for coauthor in info["coauthors"]:
             if coauthor["name"] not in author_info.keys():
                 queue.append(
                     (element[0] + 1, "https://scholar.google.com/citations?user=" + coauthor["id"] + "&hl=en&oi=ao"))
@@ -86,6 +93,9 @@ def main():
     parser.add_argument("--proxy", type=str, default="", help="the proxy of the request")
     parser.add_argument("--load_from_json", type=str, default="",
                         help="load the data from json, ignore the url and depth")
+    parser.add_argument("--font_size", type=int, default=10, help="label font size of the node")
+    parser.add_argument("--line_width", type=int, default=2, help="line width of the edge")
+    parser.add_argument("--html_output", type=bool, default=True, help="whether to output html file")
     args = parser.parse_args()
     if args.depth < 0:
         print("Invalid depth")
@@ -115,6 +125,8 @@ def main():
         print(f"Data saved to {args.json_output}!", flush=True)
     # setup figure size
     plt.figure(figsize=(args.size, args.size))
+    plt.rcParams["font.sans-serif"]=["SimHei"]  # 用来正常显示中文标签
+    plt.rcParams["axes.unicode_minus"]=False  # 用来正常显示负号
     G = nx.Graph()
     affiliation_color_list = {}
     node_colors = []
@@ -126,7 +138,8 @@ def main():
     # build the graph
     for author in author_info.keys():
         for coauthor in author_info[author]["coauthors"]:
-            G.add_edge(author, coauthor["name"])
+            if coauthor["name"] in author_info.keys():
+                G.add_edge(author, coauthor["name"])
     G.remove_nodes_from(list(nx.isolates(G)))  # ignore the nodes that have no edges
     # distribute the color
     for node in G.nodes:
@@ -135,18 +148,33 @@ def main():
     for node in G.nodes:
         node_colors.append(affiliation_color_list[author_info[node]["affiliation"]])
     node_sizes = []
-    # size is determined by h_index
+    # size is determined by citation
     for node in G.nodes:
-        node_sizes.append(int(author_info[node]["h_index"]))
+        node_sizes.append(int(author_info[node]["citation"]))
     pos = nx.kamada_kawai_layout(G)
     nx.draw_networkx_nodes(G, pos, node_size=node_sizes, node_shape="o", node_color=node_colors, alpha=0.8)
     node_labels = nx.get_node_attributes(G, "desc")
-    nx.draw_networkx_labels(G, pos, labels=node_labels, font_size=20, font_family="sans-serif")
-    nx.draw_networkx_edges(G, pos, width=2.0, alpha=0.5)
+    nx.draw_networkx_labels(G, pos, labels=node_labels, font_size=args.font_size, font_family="sans-serif")
+    nx.draw_networkx_edges(G, pos, width=args.line_width, alpha=0.5)
     plt.axis('off')
     plt.tight_layout()
     plt.savefig(args.output)
     print(f"Done! Image saved to {args.output}", flush=True)
+    if args.html_output:
+        net = Network(f"{args.size * 100}px", f"{args.size * 100}px", notebook=False)
+        net.force_atlas_2based()
+        net.toggle_physics(True)
+        for node in author_info.keys():
+            net.add_node(node, value=10 * int(author_info[node]["citation"]),
+                         title=author_info[node]["affiliation"] + "\n" + "\n".join(
+                             author_info[node]["research_interest"]),
+                         group=author_info[node]["affiliation"])
+        for edge in G.edges:
+            net.add_edge(edge[0], edge[1])
+
+        net.save_graph(args.output.replace(".png", ".html"))
+        html_file = args.output.replace(".png", ".html")
+        print(f"Html file saved to {html_file}", flush=True)
 
 
 if __name__ == "__main__":
