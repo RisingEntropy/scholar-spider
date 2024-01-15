@@ -11,6 +11,8 @@ import networkx as nx
 import argparse
 from pyvis.network import Network
 
+
+
 header = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "}
 coauthor_pattern = """<a tabindex="-1" href="/citations\?user=(.*?)">(.*?)</a>"""
 affiliation_pattern = """class="gsc_prf_ila">(.*?)</a>"""
@@ -47,10 +49,14 @@ def get_author_info(url):  # this function claws the coauthor list from google s
         session = requests.Session()
         conn = session.get(url, headers=header)
     text = conn.content.decode("utf-8")
-    if len(affiliation_reg.findall(text)) == 0:
-        res["affiliation"] = no_link_affiliation_reg.findall(text)[0]
+    aff_text = no_link_affiliation_reg.findall(text)[0]
+    if len(aff_text) == 0:
+        res["affiliation"] = "Unknown"
+    elif len(affiliation_reg.findall(aff_text)) == 0:
+        res["affiliation"] = aff_text
     else:
-        res["affiliation"] = affiliation_reg.findall(text)[0]
+        res["affiliation"] = affiliation_reg.findall(aff_text)[0]
+        # res["affiliation"] = affiliation_reg.findall(text)[0]
     coau = coauthor_reg.findall(text)
     res["coauthors"] = []
     for au in coau:
