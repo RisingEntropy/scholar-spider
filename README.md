@@ -1,6 +1,8 @@
 # Scholar Spider
 Claw co-authorship from google scholar and plot a relation graph.
+
 An online demo is [demo](https://risingentropy.top/project/2024-scholar-spider)
+
 I am recently searching for PhD mentor, so I write this script to plot a relationship figure. Diameter means the citation on google scholar. Here is the result:
 
 ![image](https://github.com/RisingEntropy/scholar-spider/assets/69978374/6435fe85-323e-4256-a475-bcbdff54d97c)
